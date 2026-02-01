@@ -181,7 +181,7 @@ const CourseManagement: React.FC = () => {
       program: progId,
       semester: semId,
       semesterNumber: course.semesterNumber || 1,
-      type: course.type || 'Core',
+      type: (course.type as 'Core' | 'Elective' | 'Lab' | 'Project' | 'Seminar') || 'Core',
       description: course.description || '',
     });
     setShowDialog(true);

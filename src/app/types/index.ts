@@ -102,6 +102,16 @@ export interface Course {
   semesterNumber: number;
   description: string;
   type?: string;
+  syllabus?: string;
+  lectureHours?: number;
+  tutorialHours?: number;
+  practicalHours?: number;
+  internalMarks?: number;
+  externalMarks?: number;
+  totalMarks?: number;
+  passingMarks?: number;
+  maxCapacity?: number;
+  currentEnrollment?: number;
   isActive?: boolean;
   createdAt: string;
 }

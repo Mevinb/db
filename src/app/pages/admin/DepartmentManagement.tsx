@@ -49,7 +49,6 @@ const DepartmentManagement: React.FC = () => {
     code: '',
     name: '',
     description: '',
-    hodName: '',
   });
 
   // Fetch departments
@@ -124,7 +123,6 @@ const DepartmentManagement: React.FC = () => {
       code: '',
       name: '',
       description: '',
-      hodName: '',
     });
     setShowDialog(true);
   };
@@ -135,8 +133,7 @@ const DepartmentManagement: React.FC = () => {
     setFormData({
       code: department.code,
       name: department.name,
-      description: department.description,
-      hodName: department.hodName || '',
+      description: department.description || '',
     });
     setShowDialog(true);
   };
@@ -149,7 +146,6 @@ const DepartmentManagement: React.FC = () => {
       code: '',
       name: '',
       description: '',
-      hodName: '',
     });
   };
 
@@ -214,7 +210,11 @@ const DepartmentManagement: React.FC = () => {
                           </span>
                         </TableCell>
                         <TableCell className="text-gray-800">{department.name}</TableCell>
-                        <TableCell className="text-gray-600">{department.hodName || '-'}</TableCell>
+                        <TableCell className="text-gray-600">
+                          {typeof department.headOfDepartment === 'object' && department.headOfDepartment
+                            ? department.headOfDepartment.name
+                            : '-'}
+                        </TableCell>
                         <TableCell className="max-w-xs truncate text-gray-500">
                           {department.description}
                         </TableCell>
@@ -286,17 +286,7 @@ const DepartmentManagement: React.FC = () => {
                     required
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="hodName">Head of Department</Label>
-                  <Input
-                    id="hodName"
-                    placeholder="e.g., Dr. John Smith"
-                    value={formData.hodName}
-                    onChange={(e) =>
-                      setFormData({ ...formData, hodName: e.target.value })
-                    }
-                  />
-                </div>
+
                 <div className="space-y-2">
                   <Label htmlFor="description">Description *</Label>
                   <Textarea
