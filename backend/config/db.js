@@ -8,6 +8,12 @@ const { Sequelize } = require('sequelize');
 const sequelize = new Sequelize(process.env.DATABASE_URL || process.env.POSTGRES_URI, {
   dialect: 'postgres',
   logging: process.env.NODE_ENV === 'development' ? (msg) => console.log(msg) : false,
+  dialectOptions: {
+    ssl: {
+      require: true,
+      rejectUnauthorized: false
+    }
+  },
   pool: {
     max: 10,
     min: 0,
@@ -23,7 +29,7 @@ const sequelize = new Sequelize(process.env.DATABASE_URL || process.env.POSTGRES
 const connectDB = async () => {
   try {
     await sequelize.authenticate();
-    console.log(`✅ PostgreSQL Connected`);
+    console.log(`✅ Supabase PostgreSQL Connected`);
     console.log(`📦 Database: ${sequelize.config.database}`);
 
     // Sync all models (creates tables if they don't exist)
