@@ -35,7 +35,7 @@ const connectDB = async () => {
     // Sync all models (creates tables if they don't exist)
     // Import models to register them before sync
     require('../models');
-    await sequelize.sync({ alter: process.env.NODE_ENV === 'development' });
+    await sequelize.sync(); // only creates missing tables, no ALTER TABLE spam
     console.log('✅ All models synchronized');
 
     // Graceful shutdown

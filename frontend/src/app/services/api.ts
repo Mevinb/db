@@ -147,7 +147,14 @@ export const authApi = {
   },
 
   getUsers: async (): Promise<ApiResponse<User[]>> => {
-    return apiFetch<User[]>('/auth/users');
+    const response = await apiFetch<any[]>('/auth/users?limit=1000');
+    if (response.success && Array.isArray(response.data)) {
+      response.data = response.data.map((u: any) => ({
+        ...u,
+        _id: String(u.id || u._id),
+      }));
+    }
+    return response as ApiResponse<User[]>;
   },
 
   updateUser: async (id: string, data: Partial<User & { isActive?: boolean }>): Promise<ApiResponse<User>> => {
