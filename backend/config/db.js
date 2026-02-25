@@ -7,7 +7,7 @@ const { Sequelize } = require('sequelize');
 
 const sequelize = new Sequelize(process.env.DATABASE_URL || process.env.POSTGRES_URI, {
   dialect: 'postgres',
-  logging: process.env.NODE_ENV === 'development' ? (msg) => console.log(msg) : false,
+  logging: false,
   dialectOptions: {
     ssl: {
       require: true,
@@ -32,11 +32,9 @@ const connectDB = async () => {
     console.log(`✅ Supabase PostgreSQL Connected`);
     console.log(`📦 Database: ${sequelize.config.database}`);
 
-    // Sync all models (creates tables if they don't exist)
-    // Import models to register them before sync
+    // Register all model associations (do NOT sync/alter on startup)
     require('../models');
-    await sequelize.sync(); // only creates missing tables, no ALTER TABLE spam
-    console.log('✅ All models synchronized');
+    console.log('✅ Models loaded');
 
     // Graceful shutdown
     process.on('SIGINT', async () => {
