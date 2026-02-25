@@ -6,6 +6,7 @@
 const { Op } = require('sequelize');
 const { Enrollment, Student, Course, Semester, Faculty, Program } = require('../models');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getFacultyCourseIds, facultyOwnsCourse } = require('../middleware/facultyOwnership');
 
 const getEnrollments = asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, student, course, semester, status } = req.query;
@@ -15,6 +16,17 @@ const getEnrollments = asyncHandler(async (req, res) => {
   if (course) where.courseId = course;
   if (semester) where.semesterId = semester;
   if (status) where.status = status;
+
+  // Faculty can only see enrollments for their own courses
+  const courseIds = await getFacultyCourseIds(req.user);
+  if (courseIds !== null) {
+    if (courseIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, total: 0, totalPages: 0, currentPage: 1, data: [] });
+    }
+    where.courseId = where.courseId
+      ? (courseIds.includes(parseInt(where.courseId)) ? where.courseId : -1)
+      : { [Op.in]: courseIds };
+  }
 
   const { count: total, rows: enrollments } = await Enrollment.findAndCountAll({
     where,
@@ -61,6 +73,14 @@ const getEnrollment = asyncHandler(async (req, res) => {
 });
 
 const createEnrollment = asyncHandler(async (req, res) => {
+  // Faculty can only enroll students in their own courses
+  if (req.body.courseId) {
+    const owns = await facultyOwnsCourse(req.user, req.body.courseId);
+    if (!owns) {
+      return res.status(403).json({ success: false, message: 'You can only enroll students in courses assigned to you' });
+    }
+  }
+
   // Check for existing enrollment
   const existing = await Enrollment.findOne({
     where: {
@@ -136,6 +156,12 @@ const updateEnrollment = asyncHandler(async (req, res) => {
 
   if (!enrollment) {
     return res.status(404).json({ success: false, message: 'Enrollment not found' });
+  }
+
+  // Faculty can only update enrollments for their own courses
+  const owns = await facultyOwnsCourse(req.user, enrollment.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only update enrollments for courses assigned to you' });
   }
 
   await enrollment.update(req.body);

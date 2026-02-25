@@ -6,6 +6,7 @@
 const { Op } = require('sequelize');
 const { Attendance, Student, Course, Faculty, Enrollment } = require('../models');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getFacultyCourseIds, facultyOwnsCourse } = require('../middleware/facultyOwnership');
 
 const getAttendance = asyncHandler(async (req, res) => {
   const { page = 1, limit = 50, student, course, date, startDate, endDate, status, session } = req.query;
@@ -22,6 +23,17 @@ const getAttendance = asyncHandler(async (req, res) => {
     where.date = { [Op.gte]: startDate };
   } else if (endDate) {
     where.date = { [Op.lte]: endDate };
+  }
+
+  // Faculty can only see attendance for their own courses
+  const courseIds = await getFacultyCourseIds(req.user);
+  if (courseIds !== null) {
+    if (courseIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, total: 0, totalPages: 0, currentPage: 1, data: [] });
+    }
+    where.courseId = where.courseId
+      ? (courseIds.includes(parseInt(where.courseId)) ? where.courseId : -1)
+      : { [Op.in]: courseIds };
   }
 
   const { count: total, rows: records } = await Attendance.findAndCountAll({
@@ -47,6 +59,12 @@ const getAttendance = asyncHandler(async (req, res) => {
 });
 
 const getCourseAttendance = asyncHandler(async (req, res) => {
+  // Faculty can only view attendance for their own courses
+  const owns = await facultyOwnsCourse(req.user, req.params.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only view attendance for courses assigned to you' });
+  }
+
   const { session } = req.query;
   const date = req.params.date || req.query.date;
 
@@ -68,6 +86,14 @@ const getCourseAttendance = asyncHandler(async (req, res) => {
 
 const markAttendance = asyncHandler(async (req, res) => {
   const { studentId, courseId, date, session, status, markedBy } = req.body;
+
+  // Faculty can only mark attendance for their own courses
+  if (courseId) {
+    const owns = await facultyOwnsCourse(req.user, courseId);
+    if (!owns) {
+      return res.status(403).json({ success: false, message: 'You can only mark attendance for courses assigned to you' });
+    }
+  }
 
   // Check for existing attendance
   const existing = await Attendance.findOne({
@@ -114,6 +140,14 @@ const markAttendance = asyncHandler(async (req, res) => {
 
 const markBulkAttendance = asyncHandler(async (req, res) => {
   const { courseId, date, session, records, markedBy } = req.body;
+
+  // Faculty can only mark attendance for their own courses
+  if (courseId) {
+    const owns = await facultyOwnsCourse(req.user, courseId);
+    if (!owns) {
+      return res.status(403).json({ success: false, message: 'You can only mark attendance for courses assigned to you' });
+    }
+  }
 
   if (!records || !Array.isArray(records) || records.length === 0) {
     return res.status(400).json({
@@ -168,6 +202,12 @@ const updateAttendance = asyncHandler(async (req, res) => {
     return res.status(404).json({ success: false, message: 'Attendance record not found' });
   }
 
+  // Faculty can only update attendance for their own courses
+  const owns = await facultyOwnsCourse(req.user, attendance.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only update attendance for courses assigned to you' });
+  }
+
   await attendance.update(req.body);
 
   attendance = await Attendance.findByPk(req.params.id, {
@@ -198,6 +238,12 @@ const deleteAttendance = asyncHandler(async (req, res) => {
 
 const getCourseAttendanceSummary = asyncHandler(async (req, res) => {
   const courseId = req.params.courseId;
+
+  // Faculty can only view attendance summary for their own courses
+  const owns = await facultyOwnsCourse(req.user, courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only view attendance summary for courses assigned to you' });
+  }
 
   // Get all enrolled students for this course
   const enrollments = await Enrollment.findAll({

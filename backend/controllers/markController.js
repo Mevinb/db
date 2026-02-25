@@ -6,6 +6,7 @@
 const { Op } = require('sequelize');
 const { Mark, Student, Course, Exam, Faculty, Enrollment, Semester } = require('../models');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getFacultyCourseIds, facultyOwnsCourse, facultyOwnsExam } = require('../middleware/facultyOwnership');
 
 const getMarks = asyncHandler(async (req, res) => {
   const { page = 1, limit = 50, student, course, exam, isPublished } = req.query;
@@ -15,6 +16,17 @@ const getMarks = asyncHandler(async (req, res) => {
   if (course) where.courseId = course;
   if (exam) where.examId = exam;
   if (isPublished !== undefined) where.isPublished = isPublished === 'true';
+
+  // Faculty can only see marks for their own courses
+  const courseIds = await getFacultyCourseIds(req.user);
+  if (courseIds !== null) {
+    if (courseIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, total: 0, totalPages: 0, currentPage: 1, data: [] });
+    }
+    where.courseId = where.courseId
+      ? (courseIds.includes(parseInt(where.courseId)) ? where.courseId : -1)
+      : { [Op.in]: courseIds };
+  }
 
   const { count: total, rows: marks } = await Mark.findAndCountAll({
     where,
@@ -40,6 +52,12 @@ const getMarks = asyncHandler(async (req, res) => {
 });
 
 const getExamMarks = asyncHandler(async (req, res) => {
+  // Faculty can only view marks for exams in their own courses
+  const owns = await facultyOwnsExam(req.user, req.params.examId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only view marks for exams in courses assigned to you' });
+  }
+
   const marks = await Mark.findAll({
     where: { examId: req.params.examId },
     include: [
@@ -55,6 +73,14 @@ const getExamMarks = asyncHandler(async (req, res) => {
 
 const enterMark = asyncHandler(async (req, res) => {
   const { studentId, examId, courseId, marksObtained, enteredBy } = req.body;
+
+  // Faculty can only enter marks for their own courses
+  if (courseId) {
+    const owns = await facultyOwnsCourse(req.user, courseId);
+    if (!owns) {
+      return res.status(403).json({ success: false, message: 'You can only enter marks for courses assigned to you' });
+    }
+  }
 
   // Check for existing mark
   const existing = await Mark.findOne({
@@ -93,6 +119,14 @@ const enterMark = asyncHandler(async (req, res) => {
 
 const enterBulkMarks = asyncHandler(async (req, res) => {
   const { examId, courseId, marks: markEntries, enteredBy } = req.body;
+
+  // Faculty can only enter marks for their own courses
+  if (courseId) {
+    const owns = await facultyOwnsCourse(req.user, courseId);
+    if (!owns) {
+      return res.status(403).json({ success: false, message: 'You can only enter marks for courses assigned to you' });
+    }
+  }
 
   if (!markEntries || !Array.isArray(markEntries) || markEntries.length === 0) {
     return res.status(400).json({
@@ -142,6 +176,12 @@ const updateMark = asyncHandler(async (req, res) => {
 
   if (!mark) {
     return res.status(404).json({ success: false, message: 'Mark entry not found' });
+  }
+
+  // Faculty can only update marks for their own courses
+  const owns = await facultyOwnsCourse(req.user, mark.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only update marks for courses assigned to you' });
   }
 
   await mark.update(req.body);

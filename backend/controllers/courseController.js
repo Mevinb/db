@@ -6,6 +6,7 @@
 const { Op } = require('sequelize');
 const { Course, Department, Program, Semester, Faculty, Enrollment, Exam, Student } = require('../models');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { facultyOwnsCourse } = require('../middleware/facultyOwnership');
 
 const getCourses = asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, search, department, program, semester, faculty, type, semesterNumber, isActive } = req.query;
@@ -132,6 +133,12 @@ const deleteCourse = asyncHandler(async (req, res) => {
 });
 
 const getCourseStudents = asyncHandler(async (req, res) => {
+  // Faculty can only see students for their own courses
+  const owns = await facultyOwnsCourse(req.user, req.params.id);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only view students for courses assigned to you' });
+  }
+
   const enrollments = await Enrollment.findAll({
     where: {
       courseId: req.params.id,

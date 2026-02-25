@@ -1,10 +1,10 @@
 # 🎓 College Management System
 
-A full-stack web application for managing college operations including departments, programs, faculty, students, courses, semesters, attendance, and examinations.
+A full-stack web application for managing college operations including departments, programs, faculty, students, courses, semesters, attendance, examinations, and marks — with **role-based access control** ensuring faculty members can only access data for courses assigned to them.
 
 ![Node.js](https://img.shields.io/badge/Node.js-v18+-green)
-![React](https://img.shields.io/badge/React-v18+-blue)
-![MongoDB](https://img.shields.io/badge/MongoDB-Atlas-brightgreen)
+![Next.js](https://img.shields.io/badge/Next.js-v15-black)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Supabase-3ECF8E)
 ![TypeScript](https://img.shields.io/badge/TypeScript-v5+-blue)
 
 ## 📋 Table of Contents
@@ -12,12 +12,12 @@ A full-stack web application for managing college operations including departmen
 - [Features](#-features)
 - [Tech Stack](#-tech-stack)
 - [Project Structure](#-project-structure)
+- [Security & Access Control](#-security--access-control)
 - [Prerequisites](#-prerequisites)
 - [Installation](#-installation)
 - [Running the Application](#-running-the-application)
 - [Demo Credentials](#-demo-credentials)
 - [API Endpoints](#-api-endpoints)
-- [Screenshots](#-screenshots)
 
 ## ✨ Features
 
@@ -27,15 +27,19 @@ A full-stack web application for managing college operations including departmen
 - 📚 Program management
 - 👨‍🏫 Faculty management
 - 👨‍🎓 Student management
-- 📖 Course management
+- 📖 Course management with faculty assignment
 - 📅 Semester management
+- 📝 Exam & marks management
+- ✅ Attendance management
 - 📢 Announcements
+- 🔓 Full access to all data across all courses
 
 ### Faculty Dashboard
-- 📚 View assigned courses
-- ✅ Mark student attendance
-- 📝 Enter exam marks
-- 📊 View student performance analytics
+- 📚 View **only** assigned courses
+- ✅ Mark student attendance (own courses only)
+- 📝 Create exams & enter marks (own courses only)
+- 📊 View student performance analytics (own courses only)
+- 🔒 Cannot see or modify data for other faculty's courses
 
 ### Student Dashboard
 - 📖 View enrolled courses
@@ -48,17 +52,17 @@ A full-stack web application for managing college operations including departmen
 ### Backend
 - **Runtime:** Node.js
 - **Framework:** Express.js
-- **Database:** MongoDB Atlas
+- **Database:** PostgreSQL (Supabase)
+- **ORM:** Sequelize v6
 - **Authentication:** JWT (JSON Web Tokens)
 - **Password Hashing:** bcryptjs
 - **Validation:** express-validator
 
 ### Frontend
-- **Framework:** React 18 with TypeScript
-- **Build Tool:** Vite
+- **Framework:** Next.js 15 with TypeScript
 - **Styling:** Tailwind CSS
 - **UI Components:** Radix UI / shadcn/ui
-- **Routing:** React Router v6
+- **Routing:** React Router v6 (client-side within Next.js)
 - **State Management:** React Context API
 - **Notifications:** Sonner (Toast)
 - **Icons:** Lucide React
@@ -67,9 +71,10 @@ A full-stack web application for managing college operations including departmen
 
 ```
 dbmsv4/
+├── run.bat                    # One-click launcher (Windows)
 ├── backend/
 │   ├── config/
-│   │   └── db.js              # Database connection
+│   │   └── db.js              # PostgreSQL/Sequelize connection
 │   ├── controllers/           # Route controllers
 │   │   ├── authController.js
 │   │   ├── departmentController.js
@@ -85,10 +90,12 @@ dbmsv4/
 │   │   ├── announcementController.js
 │   │   └── dashboardController.js
 │   ├── middleware/
-│   │   ├── auth.js            # JWT authentication
+│   │   ├── auth.js            # JWT authentication & role authorization
+│   │   ├── facultyOwnership.js # Faculty course-ownership checks
 │   │   ├── validation.js      # Request validation
-│   │   └── errorHandler.js    # Error handling
-│   ├── models/                # Mongoose schemas
+│   │   ├── errorHandler.js    # Error handling
+│   │   └── logCapture.js      # Request logging
+│   ├── models/                # Sequelize models
 │   │   ├── User.js
 │   │   ├── Department.js
 │   │   ├── Program.js
@@ -100,7 +107,8 @@ dbmsv4/
 │   │   ├── Attendance.js
 │   │   ├── Exam.js
 │   │   ├── Mark.js
-│   │   └── Announcement.js
+│   │   ├── Announcement.js
+│   │   └── index.js           # Model associations
 │   ├── routes/                # API routes
 │   ├── seeds/
 │   │   └── seedData.js        # Database seeding
@@ -114,7 +122,8 @@ dbmsv4/
 │   │   │   ├── components/    # Reusable components
 │   │   │   │   ├── ui/        # UI components (shadcn)
 │   │   │   │   ├── Sidebar.tsx
-│   │   │   │   └── DashboardLayout.tsx
+│   │   │   │   ├── DashboardLayout.tsx
+│   │   │   │   └── GenericTable.tsx
 │   │   │   ├── context/
 │   │   │   │   └── AuthContext.tsx
 │   │   │   ├── pages/
@@ -126,23 +135,55 @@ dbmsv4/
 │   │   │   │   └── api.ts     # API service layer
 │   │   │   ├── types/
 │   │   │   │   └── index.ts   # TypeScript types
-│   │   │   └── App.tsx        # Main app component
-│   │   ├── styles/
-│   │   └── main.tsx           # Entry point
-│   ├── index.html
-│   ├── vite.config.ts
-│   ├── tailwind.config.js
-│   ├── package.json
-│   └── .env                   # Frontend environment
+│   │   │   ├── ClientApp.tsx  # Client-side router
+│   │   │   ├── layout.tsx     # Root layout
+│   │   │   └── page.tsx       # Entry page
+│   │   └── styles/
+│   ├── next.config.mjs
+│   ├── tsconfig.json
+│   ├── postcss.config.mjs
+│   └── package.json
 │
 └── README.md
 ```
+
+## 🔒 Security & Access Control
+
+### Role-Based Authorization
+
+The system enforces **three levels of access**:
+
+| Role | Data Access | Write Access |
+|------|-------------|--------------|
+| **Admin** | All data across all courses | Full CRUD on everything |
+| **Faculty** | Only courses assigned to them | Create/edit exams, marks, attendance for own courses only |
+| **Student** | Own enrollment, marks, attendance | Read-only |
+
+### Faculty Ownership Enforcement (Backend)
+
+Faculty access is enforced **at the API level** — not just the frontend. The `facultyOwnership.js` middleware provides three helpers:
+
+- **`getFacultyCourseIds(user)`** — Returns course IDs assigned to the faculty; used to filter list endpoints
+- **`facultyOwnsCourse(user, courseId)`** — Verifies a specific course belongs to the faculty; used before create/update operations
+- **`facultyOwnsExam(user, examId)`** — Verifies an exam's course belongs to the faculty
+
+**Secured endpoints for faculty:**
+
+| Area | Filtered Listing | Ownership-Checked Mutations |
+|------|------------------|-----------------------------|
+| Exams | `GET /api/exams` | Create, update, publish, get-by-course |
+| Attendance | `GET /api/attendance` | Mark, bulk-mark, update, course-summary |
+| Marks | `GET /api/marks` | Enter, bulk-enter, update, get-exam-marks |
+| Enrollments | `GET /api/enrollments` | Create, update |
+| Courses | — | `GET /:id/students` |
+
+Admins bypass all ownership checks automatically.
 
 ## 📋 Prerequisites
 
 - Node.js v18 or higher
 - npm or yarn
-- MongoDB Atlas account (or local MongoDB)
+- PostgreSQL database (Supabase recommended, or local PostgreSQL)
 
 ## 🚀 Installation
 
@@ -163,10 +204,10 @@ npm install
 Create a `.env` file in the backend directory:
 
 ```env
-PORT=5000
-MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/college_management
+DATABASE_URL=postgresql://<user>:<password>@<host>:5432/<database>
 JWT_SECRET=your_jwt_secret_key
 JWT_EXPIRE=7d
+PORT=5000
 NODE_ENV=development
 ```
 
@@ -177,42 +218,38 @@ cd frontend
 npm install
 ```
 
-Create a `.env` file in the frontend directory:
-
-```env
-VITE_API_URL=http://localhost:5000/api
-```
-
 ### 4. Seed the Database (Optional)
 
 To populate the database with sample data:
 
 ```bash
 cd backend
-node seeds/seedData.js
+npm run seed
 ```
 
 ## 🏃 Running the Application
 
-### Start Backend Server
+### Quick Start (Windows)
 
+Double-click `run.bat` to launch both backend and frontend together.
+
+### Manual Start
+
+**Backend:**
 ```bash
 cd backend
 npm run dev
 # or
 node server.js
 ```
-
 Backend runs on: `http://localhost:5000`
 
-### Start Frontend Development Server
-
+**Frontend:**
 ```bash
 cd frontend
 npm run dev
 ```
-
-Frontend runs on: `http://localhost:5173`
+Frontend runs on: `http://localhost:3000`
 
 ## 🔑 Demo Credentials
 
@@ -225,81 +262,132 @@ Frontend runs on: `http://localhost:5173`
 ## 📡 API Endpoints
 
 ### Authentication
-| Method | Endpoint           | Description          |
-|--------|-------------------|----------------------|
-| POST   | `/api/auth/login` | User login           |
-| GET    | `/api/auth/me`    | Get current user     |
-| POST   | `/api/auth/logout`| User logout          |
+| Method | Endpoint           | Description          | Access |
+|--------|-------------------|----------------------|--------|
+| POST   | `/api/auth/login` | User login           | Public |
+| GET    | `/api/auth/me`    | Get current user     | Auth   |
+| POST   | `/api/auth/logout`| User logout          | Auth   |
 
 ### Departments
-| Method | Endpoint              | Description           |
-|--------|-----------------------|-----------------------|
-| GET    | `/api/departments`    | Get all departments   |
-| GET    | `/api/departments/:id`| Get department by ID  |
-| POST   | `/api/departments`    | Create department     |
-| PUT    | `/api/departments/:id`| Update department     |
-| DELETE | `/api/departments/:id`| Delete department     |
+| Method | Endpoint              | Description           | Access |
+|--------|-----------------------|-----------------------|--------|
+| GET    | `/api/departments`    | Get all departments   | Auth   |
+| GET    | `/api/departments/:id`| Get department by ID  | Auth   |
+| POST   | `/api/departments`    | Create department     | Admin  |
+| PUT    | `/api/departments/:id`| Update department     | Admin  |
+| DELETE | `/api/departments/:id`| Delete department     | Admin  |
 
 ### Programs
-| Method | Endpoint           | Description        |
-|--------|-------------------|--------------------|
-| GET    | `/api/programs`   | Get all programs   |
-| GET    | `/api/programs/:id`| Get program by ID |
-| POST   | `/api/programs`   | Create program     |
-| PUT    | `/api/programs/:id`| Update program    |
-| DELETE | `/api/programs/:id`| Delete program    |
+| Method | Endpoint           | Description        | Access |
+|--------|-------------------|--------------------|--------|
+| GET    | `/api/programs`   | Get all programs   | Auth   |
+| GET    | `/api/programs/:id`| Get program by ID | Auth   |
+| POST   | `/api/programs`   | Create program     | Admin  |
+| PUT    | `/api/programs/:id`| Update program    | Admin  |
+| DELETE | `/api/programs/:id`| Delete program    | Admin  |
 
 ### Faculty
-| Method | Endpoint          | Description       |
-|--------|-------------------|-------------------|
-| GET    | `/api/faculty`    | Get all faculty   |
-| GET    | `/api/faculty/:id`| Get faculty by ID |
-| POST   | `/api/faculty`    | Create faculty    |
-| PUT    | `/api/faculty/:id`| Update faculty    |
-| DELETE | `/api/faculty/:id`| Delete faculty    |
+| Method | Endpoint          | Description       | Access |
+|--------|-------------------|-------------------|--------|
+| GET    | `/api/faculty`    | Get all faculty   | Auth   |
+| GET    | `/api/faculty/:id`| Get faculty by ID | Auth   |
+| POST   | `/api/faculty`    | Create faculty    | Admin  |
+| PUT    | `/api/faculty/:id`| Update faculty    | Admin  |
+| DELETE | `/api/faculty/:id`| Delete faculty    | Admin  |
 
 ### Students
-| Method | Endpoint           | Description        |
-|--------|-------------------|--------------------|
-| GET    | `/api/students`   | Get all students   |
-| GET    | `/api/students/:id`| Get student by ID |
-| POST   | `/api/students`   | Create student     |
-| PUT    | `/api/students/:id`| Update student    |
-| DELETE | `/api/students/:id`| Delete student    |
+| Method | Endpoint           | Description        | Access |
+|--------|-------------------|--------------------|--------|
+| GET    | `/api/students`   | Get all students   | Auth   |
+| GET    | `/api/students/:id`| Get student by ID | Auth   |
+| POST   | `/api/students`   | Create student     | Admin  |
+| PUT    | `/api/students/:id`| Update student    | Admin  |
+| DELETE | `/api/students/:id`| Delete student    | Admin  |
 
 ### Courses
-| Method | Endpoint          | Description      |
-|--------|-------------------|------------------|
-| GET    | `/api/courses`    | Get all courses  |
-| GET    | `/api/courses/:id`| Get course by ID |
-| POST   | `/api/courses`    | Create course    |
-| PUT    | `/api/courses/:id`| Update course    |
-| DELETE | `/api/courses/:id`| Delete course    |
+| Method | Endpoint                       | Description              | Access        |
+|--------|--------------------------------|--------------------------|---------------|
+| GET    | `/api/courses`                 | Get all courses          | Auth          |
+| GET    | `/api/courses/:id`             | Get course by ID         | Auth          |
+| GET    | `/api/courses/:id/students`    | Get enrolled students    | Admin/Own Faculty |
+| POST   | `/api/courses`                 | Create course            | Admin         |
+| PUT    | `/api/courses/:id`             | Update course            | Admin         |
+| PUT    | `/api/courses/:id/assign-faculty` | Assign faculty to course | Admin      |
+| DELETE | `/api/courses/:id`             | Delete course            | Admin         |
 
 ### Semesters
-| Method | Endpoint            | Description        |
-|--------|--------------------|--------------------|
-| GET    | `/api/semesters`   | Get all semesters  |
-| GET    | `/api/semesters/:id`| Get semester by ID|
-| POST   | `/api/semesters`   | Create semester    |
-| PUT    | `/api/semesters/:id`| Update semester   |
-| DELETE | `/api/semesters/:id`| Delete semester   |
+| Method | Endpoint            | Description        | Access |
+|--------|--------------------|--------------------|--------|
+| GET    | `/api/semesters`   | Get all semesters  | Auth   |
+| GET    | `/api/semesters/:id`| Get semester by ID| Auth   |
+| POST   | `/api/semesters`   | Create semester    | Admin  |
+| PUT    | `/api/semesters/:id`| Update semester   | Admin  |
+| DELETE | `/api/semesters/:id`| Delete semester   | Admin  |
+
+### Exams
+| Method | Endpoint                      | Description           | Access              |
+|--------|-------------------------------|-----------------------|---------------------|
+| GET    | `/api/exams`                  | Get exams             | Auth (filtered for faculty) |
+| GET    | `/api/exams/:id`              | Get exam by ID        | Auth                |
+| GET    | `/api/exams/course/:courseId` | Get exams by course   | Admin/Own Faculty   |
+| POST   | `/api/exams`                  | Create exam           | Admin/Own Faculty   |
+| PUT    | `/api/exams/:id`              | Update exam           | Admin/Own Faculty   |
+| PUT    | `/api/exams/:id/publish`      | Publish results       | Admin/Own Faculty   |
+| DELETE | `/api/exams/:id`              | Delete exam           | Admin               |
+
+### Attendance
+| Method | Endpoint                              | Description              | Access              |
+|--------|---------------------------------------|--------------------------|---------------------|
+| GET    | `/api/attendance`                     | Get attendance           | Auth (filtered for faculty) |
+| GET    | `/api/attendance/course/:id/date/:d`  | Get course attendance    | Admin/Own Faculty   |
+| GET    | `/api/attendance/summary/course/:id`  | Course attendance summary| Admin/Own Faculty   |
+| GET    | `/api/attendance/summary/student/:id` | Student attendance summary| Auth               |
+| POST   | `/api/attendance`                     | Mark attendance          | Admin/Own Faculty   |
+| POST   | `/api/attendance/bulk`                | Bulk mark attendance     | Admin/Own Faculty   |
+| PUT    | `/api/attendance/:id`                 | Update attendance        | Admin/Own Faculty   |
+| DELETE | `/api/attendance/:id`                 | Delete attendance        | Admin               |
+
+### Marks
+| Method | Endpoint                          | Description           | Access              |
+|--------|-----------------------------------|-----------------------|---------------------|
+| GET    | `/api/marks`                      | Get marks             | Auth (filtered for faculty) |
+| GET    | `/api/marks/exam/:examId`         | Get exam marks        | Admin/Own Faculty   |
+| GET    | `/api/marks/student/:id/summary`  | Student grades summary| Auth                |
+| POST   | `/api/marks`                      | Enter mark            | Admin/Own Faculty   |
+| POST   | `/api/marks/bulk`                 | Bulk enter marks      | Admin/Own Faculty   |
+| PUT    | `/api/marks/:id`                  | Update mark           | Admin/Own Faculty   |
+| DELETE | `/api/marks/:id`                  | Delete mark           | Admin               |
+
+### Enrollments
+| Method | Endpoint                                    | Description           | Access              |
+|--------|---------------------------------------------|-----------------------|---------------------|
+| GET    | `/api/enrollments`                          | Get enrollments       | Auth (filtered for faculty) |
+| GET    | `/api/enrollments/:id`                      | Get enrollment by ID  | Auth                |
+| GET    | `/api/enrollments/student/:sid/course/:cid` | Get specific enrollment| Auth               |
+| POST   | `/api/enrollments`                          | Create enrollment     | Admin/Own Faculty   |
+| POST   | `/api/enrollments/bulk`                     | Bulk enroll           | Admin               |
+| PUT    | `/api/enrollments/:id`                      | Update enrollment     | Admin/Own Faculty   |
+| DELETE | `/api/enrollments/:id`                      | Delete enrollment     | Admin               |
+
+### Announcements
+| Method | Endpoint                          | Description             | Access |
+|--------|-----------------------------------|-------------------------|--------|
+| GET    | `/api/announcements`              | Get all announcements   | Auth   |
+| GET    | `/api/announcements/active`       | Get active announcements| Auth   |
+| GET    | `/api/announcements/:id`          | Get announcement by ID  | Auth   |
+| POST   | `/api/announcements`              | Create announcement     | Admin  |
+| PUT    | `/api/announcements/:id`          | Update announcement     | Admin  |
+| PUT    | `/api/announcements/:id/toggle-pin`| Toggle pin status      | Admin  |
+| DELETE | `/api/announcements/:id`          | Delete announcement     | Admin  |
 
 ### Dashboard
-| Method | Endpoint                 | Description              |
-|--------|-------------------------|--------------------------|
-| GET    | `/api/dashboard/admin`  | Admin dashboard stats    |
-| GET    | `/api/dashboard/faculty`| Faculty dashboard stats  |
-| GET    | `/api/dashboard/student`| Student dashboard stats  |
+| Method | Endpoint                 | Description              | Access  |
+|--------|-------------------------|--------------------------|---------|
+| GET    | `/api/dashboard/admin`  | Admin dashboard stats    | Admin   |
+| GET    | `/api/dashboard/faculty`| Faculty dashboard stats  | Faculty |
+| GET    | `/api/dashboard/student`| Student dashboard stats  | Student |
 
-### Additional Endpoints
-- `/api/enrollments` - Student enrollments
-- `/api/attendance` - Attendance records
-- `/api/exams` - Exam management
-- `/api/marks` - Mark/Grade management
-- `/api/announcements` - Announcements
-
-## 🔒 Authentication
+## 🔐 Authentication
 
 The API uses JWT (JSON Web Token) for authentication. Include the token in the Authorization header:
 
@@ -307,21 +395,32 @@ The API uses JWT (JSON Web Token) for authentication. Include the token in the A
 Authorization: Bearer <your_jwt_token>
 ```
 
-## 📊 Database Schema
+## 📊 Database Schema (PostgreSQL)
 
-### Core Entities
-- **User** - Authentication and authorization
-- **Department** - Academic departments
-- **Program** - Degree programs (B.Tech, M.Tech, etc.)
-- **Faculty** - Teaching staff
-- **Student** - Student records
-- **Course** - Course catalog
-- **Semester** - Academic semesters
-- **Enrollment** - Student-course enrollments
-- **Attendance** - Attendance records
-- **Exam** - Exam schedules
-- **Mark** - Student marks/grades
-- **Announcement** - System announcements
+### Core Entities & Relationships
+
+```
+User (auth) ─── Faculty ──┬── Course ──┬── Exam ──── Mark
+                           │            ├── Enrollment
+                           │            └── Attendance
+             ─── Student ──┘
+Department ──── Program
+             ─── Faculty
+Semester ────── Course
+```
+
+- **User** — Authentication (email, password, role, profileId)
+- **Department** — Academic departments with head-of-department
+- **Program** — Degree programs (B.Tech, M.Tech, etc.)
+- **Faculty** — Teaching staff, linked to User & Department
+- **Student** — Student records, linked to User, Department & Program
+- **Course** — Course catalog with assigned faculty (`facultyId`)
+- **Semester** — Academic semesters
+- **Enrollment** — Student ↔ Course ↔ Semester junction
+- **Attendance** — Per-student, per-course, per-date records
+- **Exam** — Exam schedules linked to Course & Semester
+- **Mark** — Student marks per exam
+- **Announcement** — System announcements with targeting
 
 ## 🤝 Contributing
 

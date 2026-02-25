@@ -6,6 +6,7 @@
 const { Op } = require('sequelize');
 const { Exam, Course, Semester, Mark, Student, Faculty } = require('../models');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getFacultyCourseIds, facultyOwnsCourse, facultyOwnsExam } = require('../middleware/facultyOwnership');
 
 const getExams = asyncHandler(async (req, res) => {
   const { page = 1, limit = 10, course, semester, type, status, search } = req.query;
@@ -17,6 +18,17 @@ const getExams = asyncHandler(async (req, res) => {
   if (status) where.status = status;
   if (search) {
     where.name = { [Op.iLike]: `%${search}%` };
+  }
+
+  // Faculty can only see exams for their own courses
+  const courseIds = await getFacultyCourseIds(req.user);
+  if (courseIds !== null) {
+    if (courseIds.length === 0) {
+      return res.status(200).json({ success: true, count: 0, total: 0, totalPages: 0, currentPage: 1, data: [] });
+    }
+    where.courseId = where.courseId
+      ? (courseIds.includes(parseInt(where.courseId)) ? where.courseId : -1)
+      : { [Op.in]: courseIds };
   }
 
   const { count: total, rows: exams } = await Exam.findAndCountAll({
@@ -62,6 +74,14 @@ const getExam = asyncHandler(async (req, res) => {
 });
 
 const createExam = asyncHandler(async (req, res) => {
+  // Faculty can only create exams for their own courses
+  if (req.body.courseId) {
+    const owns = await facultyOwnsCourse(req.user, req.body.courseId);
+    if (!owns) {
+      return res.status(403).json({ success: false, message: 'You can only create exams for courses assigned to you' });
+    }
+  }
+
   const exam = await Exam.create(req.body);
 
   const populatedExam = await Exam.findByPk(exam.id, {
@@ -83,6 +103,12 @@ const updateExam = asyncHandler(async (req, res) => {
 
   if (!exam) {
     return res.status(404).json({ success: false, message: 'Exam not found' });
+  }
+
+  // Faculty can only update exams for their own courses
+  const owns = await facultyOwnsCourse(req.user, exam.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only update exams for courses assigned to you' });
   }
 
   await exam.update(req.body);
@@ -122,6 +148,12 @@ const deleteExam = asyncHandler(async (req, res) => {
 });
 
 const getExamsByCourse = asyncHandler(async (req, res) => {
+  // Faculty can only view exams for their own courses
+  const owns = await facultyOwnsCourse(req.user, req.params.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only view exams for courses assigned to you' });
+  }
+
   const exams = await Exam.findAll({
     where: { courseId: req.params.courseId },
     include: [
@@ -139,6 +171,12 @@ const publishExamResults = asyncHandler(async (req, res) => {
 
   if (!exam) {
     return res.status(404).json({ success: false, message: 'Exam not found' });
+  }
+
+  // Faculty can only publish results for their own courses
+  const owns = await facultyOwnsCourse(req.user, exam.courseId);
+  if (!owns) {
+    return res.status(403).json({ success: false, message: 'You can only publish results for courses assigned to you' });
   }
 
   // Update all marks for this exam to published
