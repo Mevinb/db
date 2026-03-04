@@ -9,6 +9,7 @@
     "seed": "node seeds/seedData.js",
     "migrate": "node migrations/runMigration.js",
     "fix-schema": "node migrations/fixSchema.js",
+    "create-views": "node migrations/createViews.js",
     "setup": "node seeds/seedData.js && node migrations/runMigration.js"
   },
   "keywords": [
