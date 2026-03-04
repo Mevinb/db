@@ -931,6 +931,21 @@ const seedData = async () => {
 ╚══════════════════════════════════════════════════════════════════╝
     `);
 
+    // Run database migration to create functions, triggers, and stored procedures
+    console.log('\n🔄 Running database migration for functions & triggers...');
+    try {
+      const fs = require('fs');
+      const migrationPath = path.join(__dirname, '..', 'migrations', 'supabase_functions_triggers.sql');
+      const migrationSQL = fs.readFileSync(migrationPath, 'utf8');
+      await sequelize.query(migrationSQL);
+      console.log('✅ Database functions, triggers & stored procedures created successfully!');
+      console.log('   → Visible in Supabase Dashboard > Database > Functions');
+      console.log('   → Visible in Supabase Dashboard > Database > Triggers');
+    } catch (migError) {
+      console.error('⚠️  Migration warning:', migError.message);
+      console.log('   You can run it manually: npm run migrate');
+    }
+
     await sequelize.close();
     process.exit(0);
   } catch (error) {

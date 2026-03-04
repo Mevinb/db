@@ -69,20 +69,29 @@ const Attendance = sequelize.define('Attendance', {
   ]
 });
 
-// Static method to calculate attendance percentage
+// Static method to calculate attendance percentage (uses DB function when available)
 Attendance.calculateAttendance = async function(studentId, courseId) {
-  const { Op } = require('sequelize');
-  const total = await this.count({ where: { studentId, courseId } });
-  const present = await this.count({
-    where: {
-      studentId,
-      courseId,
-      status: { [Op.in]: ['Present', 'Late'] }
-    }
-  });
-  
-  if (total === 0) return 0;
-  return Math.round((present / total) * 100);
+  try {
+    const { sequelize } = require('../config/db');
+    const [result] = await sequelize.query(
+      'SELECT calculate_attendance_percentage(:studentId, :courseId) as percentage',
+      { replacements: { studentId, courseId } }
+    );
+    return parseFloat(result[0].percentage) || 0;
+  } catch (e) {
+    // Fallback to ORM query if DB function not available
+    const { Op } = require('sequelize');
+    const total = await this.count({ where: { studentId, courseId } });
+    const present = await this.count({
+      where: {
+        studentId,
+        courseId,
+        status: { [Op.in]: ['Present', 'Late'] }
+      }
+    });
+    if (total === 0) return 0;
+    return Math.round((present / total) * 100);
+  }
 };
 
 module.exports = Attendance;

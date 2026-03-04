@@ -6,11 +6,14 @@ A full-stack web application for managing college operations including departmen
 ![Next.js](https://img.shields.io/badge/Next.js-v15-black)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Supabase-3ECF8E)
 ![TypeScript](https://img.shields.io/badge/TypeScript-v5+-blue)
+![Functions](https://img.shields.io/badge/DB%20Functions-15-blue)
+![Triggers](https://img.shields.io/badge/DB%20Triggers-21-orange)
 
 ## 📋 Table of Contents
 
 - [Features](#-features)
 - [Tech Stack](#-tech-stack)
+- [Database Functions & Triggers](#-database-functions--triggers)
 - [Project Structure](#-project-structure)
 - [Security & Access Control](#-security--access-control)
 - [Prerequisites](#-prerequisites)
@@ -47,7 +50,57 @@ A full-stack web application for managing college operations including departmen
 - 📊 View marks and grades
 - 📢 View announcements
 
-## 🛠 Tech Stack
+## �️ Database Functions & Triggers
+
+All business logic is implemented **natively in the PostgreSQL database** using functions, triggers, and stored procedures — visible directly in Supabase Dashboard under **Database > Functions** and **Database > Triggers**.
+
+### PostgreSQL Functions (15)
+| Function | Purpose |
+|---|---|
+| `calculate_grade(percentage)` | Returns letter grade from percentage score |
+| `calculate_grade_points(grade)` | Returns grade points (0–10) from letter grade |
+| `calculate_attendance_percentage(student, course)` | Computes attendance % for a student in a course |
+| `calculate_student_cgpa(student_id)` | Computes CGPA from all completed courses |
+| `get_admin_dashboard_stats()` | Returns all dashboard counts as JSON (1 DB call) |
+| `get_department_statistics()` | Returns dept-wise student/faculty/course counts |
+| `get_student_academic_summary(student_id)` | Returns full academic profile as JSON |
+| `get_faculty_course_summary(faculty_id)` | Returns all courses with live stats |
+| `update_updated_at_column()` | Utility: auto-sets `updatedAt` on row updates |
+| `generate_academic_code(prefix, seq)` | Generates formatted academic codes |
+| + 5 trigger functions (validation, sync, CGPA update) | See Triggers section below |
+
+### Triggers (21 across all tables)
+| Trigger | Table | Event | Purpose |
+|---|---|---|---|
+| `trg_marks_auto_calculate` | marks | BEFORE INSERT/UPDATE | Auto-fills percentage, grade, isPassed |
+| `trg_mark_value_validation` | marks | BEFORE INSERT/UPDATE | Prevents marks > exam maxMarks |
+| `trg_enrollment_count_update` | enrollments | AFTER I/U/D | Keeps `currentEnrollment` in sync |
+| `trg_enrollment_capacity_check` | enrollments | BEFORE INSERT | Blocks over-enrollment |
+| `trg_enrollment_cgpa_update` | enrollments | AFTER UPDATE | Recalculates student CGPA on grade change |
+| `trg_attendance_update_enrollment` | attendances | AFTER I/U/D | Updates attendance % on enrollment record |
+| `trg_semester_date_validation` | semesters | BEFORE I/U | Validates end date > start date |
+| `trg_single_current_semester` | semesters | BEFORE I/U | Ensures only one current semester |
+| `trg_exam_marks_validation` | exams | BEFORE I/U | passingMarks ≤ maxMarks |
+| `trg_*_updated_at` (×12) | all tables | BEFORE UPDATE | Auto-sets `updatedAt` timestamp |
+
+### Stored Procedures (4)
+| Procedure | Purpose |
+|---|---|
+| `enroll_student(student_id, course_id, semester_id)` | Validated enrollment with capacity & duplicate checks |
+| `update_enrollment_grade(enrollment_id, grade)` | Sets grade + auto-calculates grade points + marks Completed |
+| `mark_bulk_attendance(course_id, date, session, marked_by, records)` | Bulk attendance upsert from JSON array |
+| `enter_bulk_marks(exam_id, course_id, entered_by, marks)` | Bulk mark entry/update from JSON array |
+
+### Applying the Migration
+```bash
+cd backend
+npm run migrate
+```
+The migration file is at `backend/migrations/supabase_functions_triggers.sql`.
+
+---
+
+## 💻 Tech Stack
 
 ### Backend
 - **Runtime:** Node.js
@@ -110,8 +163,11 @@ dbmsv4/
 │   │   ├── Announcement.js
 │   │   └── index.js           # Model associations
 │   ├── routes/                # API routes
+│   ├── migrations/
+│   │   ├── supabase_functions_triggers.sql  # All DB functions, triggers & procedures
+│   │   └── runMigration.js    # Migration runner
 │   ├── seeds/
-│   │   └── seedData.js        # Database seeding
+│   │   └── seedData.js        # Database seeding (also runs migration)
 │   ├── server.js              # Entry point
 │   ├── package.json
 │   └── .env                   # Environment variables
@@ -218,14 +274,27 @@ cd frontend
 npm install
 ```
 
-### 4. Seed the Database (Optional)
+### 4. Seed the Database
 
-To populate the database with sample data:
+To populate the database with sample data and automatically apply all DB functions/triggers:
 
 ```bash
 cd backend
 npm run seed
 ```
+
+### 5. Apply Database Functions & Triggers (if not seeding)
+
+If you already have data and just want to apply the functions and triggers:
+
+```bash
+cd backend
+npm run migrate
+```
+
+This creates all functions, triggers, and stored procedures visible in:
+- Supabase Dashboard → **Database > Functions**
+- Supabase Dashboard → **Database > Triggers**
 
 ## 🏃 Running the Application
 
@@ -239,10 +308,16 @@ Double-click `run.bat` to launch both backend and frontend together.
 ```bash
 cd backend
 npm run dev
-# or
+# or for production:
 node server.js
 ```
 Backend runs on: `http://localhost:5000`
+
+> Available scripts:
+> - `npm run dev` — start with nodemon (auto-restart)
+> - `npm run seed` — seed database with sample data + run migration
+> - `npm run migrate` — apply DB functions, triggers & stored procedures only
+> - `npm run setup` — seed + migrate in one command
 
 **Frontend:**
 ```bash
@@ -421,6 +496,20 @@ Semester ────── Course
 - **Exam** — Exam schedules linked to Course & Semester
 - **Mark** — Student marks per exam
 - **Announcement** — System announcements with targeting
+
+### Database-Level Automation
+
+Key fields are maintained **automatically by PostgreSQL triggers** — no application code needed:
+
+| Field | Table | Maintained By |
+|---|---|---|
+| `percentage`, `grade`, `isPassed` | marks | `trg_marks_auto_calculate` |
+| `currentEnrollment` | courses | `trg_enrollment_count_update` |
+| `attendancePercentage` | enrollments | `trg_attendance_update_enrollment` |
+| `cgpa`, `totalCreditsEarned` | students | `trg_enrollment_cgpa_update` |
+| `updatedAt` | all tables | `trg_*_updated_at` triggers |
+
+See the [Database Functions & Triggers](#️-database-functions--triggers) section above for the full list.
 
 ## 🤝 Contributing
 

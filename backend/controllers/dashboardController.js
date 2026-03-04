@@ -13,30 +13,30 @@ const {
 const { asyncHandler } = require('../middleware/errorHandler');
 
 const getAdminDashboard = asyncHandler(async (req, res) => {
-  // Parallel count queries
-  const [
-    totalStudents,
-    totalFaculty,
-    totalDepartments,
-    totalPrograms,
-    totalCourses,
-    activeStudents,
-    activeFaculty,
-    activeSemesters,
-    totalEnrollments,
-    totalExams
-  ] = await Promise.all([
-    Student.count(),
-    Faculty.count(),
-    Department.count(),
-    Program.count(),
-    Course.count(),
-    Student.count({ where: { status: 'Active' } }),
-    Faculty.count({ where: { status: 'Active' } }),
-    Semester.count({ where: { isCurrent: true } }),
-    Enrollment.count(),
-    Exam.count()
-  ]);
+  // Use PostgreSQL function for dashboard stats (visible in Supabase Dashboard > Functions)
+  let overview;
+  try {
+    const [statsResult] = await sequelize.query('SELECT get_admin_dashboard_stats() as stats');
+    overview = statsResult[0].stats;
+  } catch (dbFnError) {
+    // Fallback to direct queries if DB function not yet migrated
+    const [
+      totalStudents, totalFaculty, totalDepartments, totalPrograms,
+      totalCourses, activeStudents, activeFaculty, activeSemesters,
+      totalEnrollments, totalExams
+    ] = await Promise.all([
+      Student.count(), Faculty.count(), Department.count(), Program.count(),
+      Course.count(), Student.count({ where: { status: 'Active' } }),
+      Faculty.count({ where: { status: 'Active' } }),
+      Semester.count({ where: { isCurrent: true } }),
+      Enrollment.count(), Exam.count()
+    ]);
+    overview = {
+      totalStudents, totalFaculty, totalDepartments, totalPrograms,
+      totalCourses, activeStudents, activeFaculty, activeSemesters,
+      totalEnrollments, totalExams
+    };
+  }
 
   // Department-wise student count
   const departmentStats = await Department.findAll({
@@ -98,22 +98,20 @@ const getAdminDashboard = asyncHandler(async (req, res) => {
     raw: true
   });
 
+  // Also try using DB function for department stats
+  let deptStats = departmentStats;
+  try {
+    const [dbDeptStats] = await sequelize.query('SELECT * FROM get_department_statistics()');
+    if (dbDeptStats && dbDeptStats.length > 0) {
+      deptStats = dbDeptStats;
+    }
+  } catch (e) { /* fallback to ORM stats */ }
+
   res.status(200).json({
     success: true,
     data: {
-      overview: {
-        totalStudents,
-        totalFaculty,
-        totalDepartments,
-        totalPrograms,
-        totalCourses,
-        activeStudents,
-        activeFaculty,
-        activeSemesters,
-        totalEnrollments,
-        totalExams
-      },
-      departmentStats,
+      overview,
+      departmentStats: deptStats,
       departmentFacultyStats,
       recentAnnouncements,
       enrollmentTrends

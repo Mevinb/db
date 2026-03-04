@@ -92,19 +92,22 @@ const Mark = sequelize.define('Mark', {
   ],
   hooks: {
     beforeSave: async (mark) => {
-      // Calculate percentage
-      mark.percentage = Math.round((mark.marksObtained / mark.maxMarks) * 100);
-      
-      // Calculate grade based on percentage
-      const p = mark.percentage;
-      if (p >= 90) mark.grade = 'A+';
-      else if (p >= 80) mark.grade = 'A';
-      else if (p >= 70) mark.grade = 'B+';
-      else if (p >= 60) mark.grade = 'B';
-      else if (p >= 50) mark.grade = 'C+';
-      else if (p >= 45) mark.grade = 'C';
-      else if (p >= 40) mark.grade = 'D';
-      else mark.grade = 'F';
+      // NOTE: Grade calculation is now also handled by PostgreSQL trigger
+      // (trg_marks_auto_calculate) in the database. This hook serves as
+      // an application-level fallback for consistency.
+      if (mark.marksObtained != null && mark.maxMarks && mark.maxMarks > 0) {
+        mark.percentage = Math.round((mark.marksObtained / mark.maxMarks) * 100);
+        
+        const p = mark.percentage;
+        if (p >= 90) mark.grade = 'A+';
+        else if (p >= 80) mark.grade = 'A';
+        else if (p >= 70) mark.grade = 'B+';
+        else if (p >= 60) mark.grade = 'B';
+        else if (p >= 50) mark.grade = 'C+';
+        else if (p >= 45) mark.grade = 'C';
+        else if (p >= 40) mark.grade = 'D';
+        else mark.grade = 'F';
+      }
 
       // Determine pass/fail using exam's passing marks
       try {
@@ -114,7 +117,7 @@ const Mark = sequelize.define('Mark', {
           mark.isPassed = mark.marksObtained >= exam.passingMarks;
         }
       } catch (e) {
-        // If exam not found, skip
+        // If exam not found, skip — DB trigger will handle it
       }
     }
   }

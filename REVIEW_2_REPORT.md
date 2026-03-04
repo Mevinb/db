@@ -3,7 +3,7 @@
 **Project:** College Management System (CMS)  
 **Database:** PostgreSQL (hosted on Supabase)  
 **ORM:** Sequelize v6  
-**Date:** February 26, 2026
+**Date:** March 4, 2026
 
 ---
 
@@ -16,7 +16,7 @@
 5. [Normalization up to 3NF](#5-normalization-up-to-3nf)
 6. [SQL Queries](#6-sql-queries)
 7. [Data Population](#7-data-population)
-8. [Triggers & Hooks (Stored Procedure Equivalents)](#8-triggers--hooks)
+8. [Database Functions, Triggers & Stored Procedures](#8-database-functions-triggers--stored-procedures)
 9. [Indexes & Constraints](#9-indexes--constraints)
 10. [Summary](#10-summary)
 
@@ -932,15 +932,22 @@ WHERE "studentId" = 1 AND "courseId" = 1;
 
 ### 6.3 Dashboard Analytics Queries
 
-#### Query 11: Admin dashboard — Total counts (used with Promise.all)
+#### Query 11: Admin dashboard — All stats via single DB function call
 ```sql
--- These are run in parallel for the dashboard
-SELECT COUNT(*) AS "totalStudents" FROM students WHERE status = 'Active';
-SELECT COUNT(*) AS "totalFaculty" FROM faculties WHERE "isActive" = TRUE;
-SELECT COUNT(*) AS "totalCourses" FROM courses WHERE "isActive" = TRUE;
-SELECT COUNT(*) AS "totalDepartments" FROM departments WHERE "isActive" = TRUE;
-SELECT COUNT(*) AS "totalPrograms" FROM programs WHERE "isActive" = TRUE;
-SELECT COUNT(*) AS "totalEnrollments" FROM enrollments WHERE status = 'Enrolled';
+-- Single call to the database function (replaces 6+ parallel queries)
+SELECT get_admin_dashboard_stats() AS stats;
+-- Returns JSON:
+-- { totalStudents, totalFaculty, totalDepartments, totalPrograms,
+--   totalCourses, activeStudents, activeFaculty, activeSemesters,
+--   totalEnrollments, totalExams }
+
+-- Department-wise statistics via set-returning function
+SELECT * FROM get_department_statistics();
+-- Returns: department_id, department_name, student_count, faculty_count, program_count, course_count
+
+-- Student academic summary
+SELECT get_student_academic_summary(1) AS summary;
+-- Returns JSON: cgpa, totalCreditsEarned, averageAttendance, averageMarks, etc.
 ```
 
 #### Query 12: Top courses by enrollment count
@@ -1081,232 +1088,723 @@ VALUES
 
 ---
 
-## 8. Triggers & Hooks (Stored Procedure Equivalents)
+## 8. Database Functions, Triggers & Stored Procedures
 
-Since the project uses Sequelize ORM, traditional SQL triggers and stored procedures are implemented as **Sequelize Hooks** — these are the ORM equivalent and execute the same logic at the database interaction layer.
+All business logic has been implemented as **native PostgreSQL functions, triggers, and stored procedures** directly in the Supabase database. These are visible in the **Supabase Dashboard → Database → Functions** and **Database → Triggers** panels.
 
-### 8.1 Password Hashing Trigger (beforeCreate / beforeUpdate on Users)
+The migration file is located at `backend/migrations/supabase_functions_triggers.sql` and can be applied by running `npm run migrate`.
 
-**Purpose:** Automatically hash the password before storing it in the database.
+---
 
-**Equivalent SQL Trigger:**
+### 8.1 Utility Functions
+
+#### `update_updated_at_column()` — Auto-timestamp trigger function
+**Purpose:** Automatically sets `updatedAt` to the current time before any row update. Applied to all 12 tables.
+
 ```sql
-CREATE OR REPLACE FUNCTION hash_password()
+CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND NEW.password <> OLD.password) THEN
-        NEW.password := crypt(NEW.password, gen_salt('bf', 10));
-    END IF;
+    NEW."updatedAt" = NOW();
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
-
-CREATE TRIGGER trg_hash_password
-BEFORE INSERT OR UPDATE ON users
-FOR EACH ROW
-EXECUTE FUNCTION hash_password();
 ```
 
-**Sequelize Hook Implementation:**
-```javascript
-hooks: {
-    beforeCreate: async (user) => {
-        if (user.password) {
-            const salt = await bcrypt.genSalt(10);
-            user.password = await bcrypt.hash(user.password, salt);
-        }
-    },
-    beforeUpdate: async (user) => {
-        if (user.changed('password')) {
-            const salt = await bcrypt.genSalt(10);
-            user.password = await bcrypt.hash(user.password, salt);
-        }
-    }
-}
-```
-
-### 8.2 Auto-Calculate Marks Percentage & Grade (beforeSave on Marks)
-
-**Purpose:** Automatically compute percentage, letter grade, and pass/fail status when marks are entered or updated.
-
-**Equivalent SQL Trigger:**
+Applied with one trigger per table, for example:
 ```sql
-CREATE OR REPLACE FUNCTION calculate_mark_grade()
+CREATE TRIGGER trg_students_updated_at
+    BEFORE UPDATE ON students
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+```
+
+> This trigger fires on all 12 tables: `users`, `departments`, `programs`, `faculties`, `students`, `semesters`, `courses`, `enrollments`, `attendances`, `exams`, `marks`, `announcements`.
+
+#### `generate_academic_code(prefix TEXT, seq_num INTEGER)` — Code generator
+```sql
+CREATE OR REPLACE FUNCTION generate_academic_code(prefix TEXT, seq_num INTEGER)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN prefix || '-' || LPAD(seq_num::TEXT, 4, '0');
+END;
+$$ LANGUAGE plpgsql;
+```
+
+---
+
+### 8.2 Mark Calculation Functions & Trigger
+
+#### `calculate_grade(percentage NUMERIC)` → VARCHAR(2)
+**Purpose:** Returns the letter grade for a given percentage score.
+
+```sql
+CREATE OR REPLACE FUNCTION calculate_grade(percentage NUMERIC)
+RETURNS VARCHAR(2) AS $$
+BEGIN
+    IF percentage >= 90 THEN RETURN 'A+';
+    ELSIF percentage >= 80 THEN RETURN 'A';
+    ELSIF percentage >= 70 THEN RETURN 'B+';
+    ELSIF percentage >= 60 THEN RETURN 'B';
+    ELSIF percentage >= 50 THEN RETURN 'C+';
+    ELSIF percentage >= 45 THEN RETURN 'C';
+    ELSIF percentage >= 40 THEN RETURN 'D';
+    ELSE RETURN 'F';
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### `calculate_grade_points(grade VARCHAR)` → NUMERIC
+**Purpose:** Returns the grade point value (0–10) for a letter grade.
+
+```sql
+CREATE OR REPLACE FUNCTION calculate_grade_points(grade VARCHAR)
+RETURNS NUMERIC AS $$
+BEGIN
+    CASE grade
+        WHEN 'A+' THEN RETURN 10;  WHEN 'A'  THEN RETURN 9;
+        WHEN 'B+' THEN RETURN 8;   WHEN 'B'  THEN RETURN 7;
+        WHEN 'C+' THEN RETURN 6;   WHEN 'C'  THEN RETURN 5;
+        WHEN 'D'  THEN RETURN 4;   ELSE RETURN 0;
+    END CASE;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### `trg_calculate_mark_fields()` — Trigger on `marks`
+**Purpose:** Automatically calculates `percentage`, `grade`, and `isPassed` whenever a mark is inserted or updated.
+
+```sql
+CREATE OR REPLACE FUNCTION trg_calculate_mark_fields()
 RETURNS TRIGGER AS $$
 DECLARE
-    v_passing_marks INTEGER;
+    v_max_marks NUMERIC;
+    v_passing_marks NUMERIC;
+    v_percentage NUMERIC;
 BEGIN
-    -- Calculate percentage
-    NEW.percentage := ROUND((NEW."marksObtained" / NEW."maxMarks") * 100);
-    
-    -- Assign grade based on percentage
-    NEW.grade := CASE
-        WHEN NEW.percentage >= 90 THEN 'A+'
-        WHEN NEW.percentage >= 80 THEN 'A'
-        WHEN NEW.percentage >= 70 THEN 'B+'
-        WHEN NEW.percentage >= 60 THEN 'B'
-        WHEN NEW.percentage >= 50 THEN 'C+'
-        WHEN NEW.percentage >= 45 THEN 'C'
-        WHEN NEW.percentage >= 40 THEN 'D'
-        ELSE 'F'
-    END;
-    
-    -- Determine pass/fail from exam's passing marks
-    SELECT "passingMarks" INTO v_passing_marks FROM exams WHERE id = NEW."examId";
-    IF v_passing_marks IS NOT NULL THEN
-        NEW."isPassed" := (NEW."marksObtained" >= v_passing_marks);
+    SELECT "maxMarks", "passingMarks"
+    INTO v_max_marks, v_passing_marks
+    FROM exams WHERE id = NEW."examId";
+
+    IF NEW."maxMarks" IS NULL OR NEW."maxMarks" = 0 THEN
+        NEW."maxMarks" = v_max_marks;
     END IF;
-    
+
+    v_percentage := ROUND((NEW."marksObtained"::NUMERIC / NEW."maxMarks"::NUMERIC) * 100);
+    NEW.percentage = v_percentage;
+    NEW.grade = calculate_grade(v_percentage);
+    NEW."isPassed" = (NEW."marksObtained" >= v_passing_marks);
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_calculate_mark_grade
-BEFORE INSERT OR UPDATE ON marks
-FOR EACH ROW
-EXECUTE FUNCTION calculate_mark_grade();
+CREATE TRIGGER trg_marks_auto_calculate
+    BEFORE INSERT OR UPDATE OF "marksObtained"
+    ON marks
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_calculate_mark_fields();
 ```
 
-**Sequelize Hook Implementation:**
-```javascript
-hooks: {
-    beforeSave: async (mark) => {
-        mark.percentage = Math.round((mark.marksObtained / mark.maxMarks) * 100);
-        const p = mark.percentage;
-        if (p >= 90) mark.grade = 'A+';
-        else if (p >= 80) mark.grade = 'A';
-        // ... (full grading scale)
-        else mark.grade = 'F';
-        
-        const exam = await Exam.findByPk(mark.examId);
-        if (exam) {
-            mark.isPassed = mark.marksObtained >= exam.passingMarks;
-        }
-    }
-}
-```
+#### `trg_validate_mark_value()` — Validation trigger on `marks`
+**Purpose:** Prevents marks from exceeding the exam's maximum marks.
 
-### 8.3 Semester Validation Trigger (validate on Semesters)
-
-**Purpose:** Ensure end date is always after start date.
-
-**Equivalent SQL Trigger:**
 ```sql
-CREATE OR REPLACE FUNCTION validate_semester_dates()
+CREATE OR REPLACE FUNCTION trg_validate_mark_value()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_max_marks NUMERIC;
+BEGIN
+    SELECT "maxMarks" INTO v_max_marks FROM exams WHERE id = NEW."examId";
+    IF v_max_marks IS NOT NULL AND NEW."marksObtained" > v_max_marks THEN
+        RAISE EXCEPTION 'Marks obtained (%) cannot exceed maximum marks (%) for this exam',
+            NEW."marksObtained", v_max_marks;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_mark_value_validation
+    BEFORE INSERT OR UPDATE ON marks
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_validate_mark_value();
+```
+
+---
+
+### 8.3 Enrollment Functions & Triggers
+
+#### `trg_update_course_enrollment_count()` — Auto-sync enrollment count
+**Purpose:** Keeps `courses.currentEnrollment` accurate by recalculating it whenever an enrollment is inserted, updated, or deleted.
+
+```sql
+CREATE OR REPLACE FUNCTION trg_update_course_enrollment_count()
 RETURNS TRIGGER AS $$
 BEGIN
-    IF NEW."endDate" <= NEW."startDate" THEN
-        RAISE EXCEPTION 'End date must be after start date';
+    IF TG_OP = 'DELETE' THEN
+        UPDATE courses
+        SET "currentEnrollment" = (
+            SELECT COUNT(*) FROM enrollments
+            WHERE "courseId" = OLD."courseId" AND status = 'Enrolled'
+        ) WHERE id = OLD."courseId";
+        RETURN OLD;
+    ELSE
+        IF TG_OP = 'UPDATE' AND OLD."courseId" IS DISTINCT FROM NEW."courseId" THEN
+            UPDATE courses
+            SET "currentEnrollment" = (
+                SELECT COUNT(*) FROM enrollments
+                WHERE "courseId" = OLD."courseId" AND status = 'Enrolled'
+            ) WHERE id = OLD."courseId";
+        END IF;
+        UPDATE courses
+        SET "currentEnrollment" = (
+            SELECT COUNT(*) FROM enrollments
+            WHERE "courseId" = NEW."courseId" AND status = 'Enrolled'
+        ) WHERE id = NEW."courseId";
+        RETURN NEW;
     END IF;
-    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_validate_semester_dates
-BEFORE INSERT OR UPDATE ON semesters
-FOR EACH ROW
-EXECUTE FUNCTION validate_semester_dates();
+CREATE TRIGGER trg_enrollment_count_update
+    AFTER INSERT OR UPDATE OR DELETE ON enrollments
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_update_course_enrollment_count();
 ```
 
-### 8.4 Exam Validation Trigger (validate on Exams)
+#### `trg_check_enrollment_capacity()` — Capacity guard trigger
+**Purpose:** Prevents enrollment if a course has reached its `maxCapacity`.
 
-**Purpose:** Ensure passing marks never exceed maximum marks.
-
-**Equivalent SQL Trigger:**
 ```sql
-CREATE OR REPLACE FUNCTION validate_exam_marks()
+CREATE OR REPLACE FUNCTION trg_check_enrollment_capacity()
 RETURNS TRIGGER AS $$
+DECLARE
+    v_max_capacity INTEGER;
+    v_current_count INTEGER;
 BEGIN
-    IF NEW."passingMarks" > NEW."maxMarks" THEN
-        RAISE EXCEPTION 'Passing marks cannot exceed maximum marks';
+    SELECT "maxCapacity" INTO v_max_capacity FROM courses WHERE id = NEW."courseId";
+    SELECT COUNT(*) INTO v_current_count FROM enrollments
+    WHERE "courseId" = NEW."courseId" AND status = 'Enrolled';
+
+    IF v_current_count >= v_max_capacity THEN
+        RAISE EXCEPTION 'Course enrollment capacity (%) has been reached', v_max_capacity;
     END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_validate_exam_marks
-BEFORE INSERT OR UPDATE ON exams
-FOR EACH ROW
-EXECUTE FUNCTION validate_exam_marks();
+CREATE TRIGGER trg_enrollment_capacity_check
+    BEFORE INSERT ON enrollments
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_check_enrollment_capacity();
 ```
 
-### 8.5 Global Hook — Auto-inject `_id` field (afterFind)
+#### `trg_update_student_cgpa()` — CGPA auto-update trigger
+**Purpose:** Recalculates and updates a student's `cgpa` and `totalCreditsEarned` whenever an enrollment is marked as Completed with a grade.
 
-**Purpose:** Maintain compatibility between PostgreSQL integer IDs and frontend expectations (string `_id` field from MongoDB migration).
-
-```javascript
-sequelize.addHook('afterFind', (results) => {
-    // Recursively adds _id = String(id) to all model instances
-    // and their nested associations
-});
-```
-
-### 8.6 Stored Procedure Equivalents
-
-#### Procedure 1: Calculate Attendance Percentage (Static Method)
 ```sql
--- Equivalent stored procedure
-CREATE OR REPLACE FUNCTION calculate_attendance(
+CREATE OR REPLACE FUNCTION trg_update_student_cgpa()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_cgpa NUMERIC;
+    v_total_credits INTEGER;
+BEGIN
+    v_cgpa := calculate_student_cgpa(NEW."studentId");
+
+    SELECT COALESCE(SUM(c.credits), 0) INTO v_total_credits
+    FROM enrollments e
+    JOIN courses c ON c.id = e."courseId"
+    WHERE e."studentId" = NEW."studentId"
+      AND e.status = 'Completed'
+      AND e.grade NOT IN ('F', 'I', 'W');
+
+    UPDATE students
+    SET cgpa = v_cgpa, "totalCreditsEarned" = v_total_credits
+    WHERE id = NEW."studentId";
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_enrollment_cgpa_update
+    AFTER UPDATE OF grade, "gradePoints", status ON enrollments
+    FOR EACH ROW
+    WHEN (NEW.status = 'Completed')
+    EXECUTE FUNCTION trg_update_student_cgpa();
+```
+
+---
+
+### 8.4 Attendance Functions & Triggers
+
+#### `calculate_attendance_percentage(p_student_id, p_course_id)` → NUMERIC
+**Purpose:** Returns the attendance percentage for a student in a specific course.
+
+```sql
+CREATE OR REPLACE FUNCTION calculate_attendance_percentage(
     p_student_id INTEGER,
     p_course_id INTEGER
-) RETURNS INTEGER AS $$
+)
+RETURNS NUMERIC AS $$
 DECLARE
     v_total INTEGER;
     v_present INTEGER;
 BEGIN
     SELECT COUNT(*) INTO v_total
-    FROM attendances WHERE "studentId" = p_student_id AND "courseId" = p_course_id;
-    
-    SELECT COUNT(*) INTO v_present
-    FROM attendances 
-    WHERE "studentId" = p_student_id AND "courseId" = p_course_id 
-      AND status IN ('Present', 'Late');
-    
+    FROM attendances
+    WHERE "studentId" = p_student_id AND "courseId" = p_course_id;
+
     IF v_total = 0 THEN RETURN 0; END IF;
-    RETURN ROUND((v_present::DECIMAL / v_total) * 100);
+
+    SELECT COUNT(*) INTO v_present
+    FROM attendances
+    WHERE "studentId" = p_student_id
+      AND "courseId" = p_course_id
+      AND status IN ('Present', 'Late');
+
+    RETURN ROUND((v_present::NUMERIC / v_total::NUMERIC) * 100, 2);
 END;
 $$ LANGUAGE plpgsql;
 ```
 
-**Application Implementation (Attendance model static method):**
+**Called from backend:**
 ```javascript
-Attendance.calculateAttendance = async function(studentId, courseId) {
-    const total = await this.count({ where: { studentId, courseId } });
-    const present = await this.count({
-        where: { studentId, courseId, status: { [Op.in]: ['Present', 'Late'] } }
-    });
-    if (total === 0) return 0;
-    return Math.round((present / total) * 100);
-};
+const [result] = await sequelize.query(
+  'SELECT calculate_attendance_percentage(:studentId, :courseId) as percentage',
+  { replacements: { studentId, courseId } }
+);
 ```
 
-#### Procedure 2: Calculate Grade Points (Instance Method)
+#### `trg_update_enrollment_attendance()` — Auto-update attendance % on enrollment
+**Purpose:** After every attendance INSERT/UPDATE/DELETE, recalculates and stores the attendance percentage in the `enrollments` table.
+
 ```sql
-CREATE OR REPLACE FUNCTION calculate_grade_points(p_grade VARCHAR)
-RETURNS DECIMAL AS $$
+CREATE OR REPLACE FUNCTION trg_update_enrollment_attendance()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_attendance_pct NUMERIC;
+    v_student_id INTEGER;
+    v_course_id INTEGER;
 BEGIN
-    RETURN CASE p_grade
-        WHEN 'A+' THEN 10  WHEN 'A' THEN 9  WHEN 'B+' THEN 8  WHEN 'B' THEN 7
-        WHEN 'C+' THEN 6   WHEN 'C' THEN 5  WHEN 'D' THEN 4   ELSE 0
-    END;
+    IF TG_OP = 'DELETE' THEN
+        v_student_id := OLD."studentId";
+        v_course_id := OLD."courseId";
+    ELSE
+        v_student_id := NEW."studentId";
+        v_course_id := NEW."courseId";
+    END IF;
+
+    v_attendance_pct := calculate_attendance_percentage(v_student_id, v_course_id);
+
+    UPDATE enrollments
+    SET "attendancePercentage" = v_attendance_pct
+    WHERE "studentId" = v_student_id
+      AND "courseId" = v_course_id
+      AND status = 'Enrolled';
+
+    IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_attendance_update_enrollment
+    AFTER INSERT OR UPDATE OR DELETE ON attendances
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_update_enrollment_attendance();
+```
+
+---
+
+### 8.5 Validation Triggers
+
+#### `trg_validate_semester_dates()` — Date range validation
+**Purpose:** Ensures semester end date is always after start date.
+
+```sql
+CREATE OR REPLACE FUNCTION trg_validate_semester_dates()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW."endDate" <= NEW."startDate" THEN
+        RAISE EXCEPTION 'Semester end date must be after start date';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_semester_date_validation
+    BEFORE INSERT OR UPDATE ON semesters
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_validate_semester_dates();
+```
+
+#### `trg_ensure_single_current_semester()` — Single active semester
+**Purpose:** Ensures only one semester can be marked as `isCurrent = true` at any time.
+
+```sql
+CREATE OR REPLACE FUNCTION trg_ensure_single_current_semester()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW."isCurrent" = true THEN
+        UPDATE semesters SET "isCurrent" = false
+        WHERE "isCurrent" = true AND id <> NEW.id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_single_current_semester
+    BEFORE INSERT OR UPDATE OF "isCurrent" ON semesters
+    FOR EACH ROW
+    WHEN (NEW."isCurrent" = true)
+    EXECUTE FUNCTION trg_ensure_single_current_semester();
+```
+
+#### `trg_validate_exam_marks()` — Exam mark validation
+**Purpose:** Prevents passing marks from exceeding the exam's maximum marks.
+
+```sql
+CREATE OR REPLACE FUNCTION trg_validate_exam_marks()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW."passingMarks" > NEW."maxMarks" THEN
+        RAISE EXCEPTION 'Passing marks (%) cannot exceed maximum marks (%)',
+            NEW."passingMarks", NEW."maxMarks";
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_exam_marks_validation
+    BEFORE INSERT OR UPDATE ON exams
+    FOR EACH ROW
+    EXECUTE FUNCTION trg_validate_exam_marks();
+```
+
+---
+
+### 8.6 Dashboard & Statistics Functions
+
+#### `get_admin_dashboard_stats()` → JSON
+**Purpose:** Returns all admin dashboard counts (students, faculty, departments, etc.) in a single JSON object from one DB call.
+
+```sql
+CREATE OR REPLACE FUNCTION get_admin_dashboard_stats()
+RETURNS JSON AS $$
+DECLARE
+    result JSON;
+BEGIN
+    SELECT json_build_object(
+        'totalStudents',     (SELECT COUNT(*) FROM students),
+        'totalFaculty',      (SELECT COUNT(*) FROM faculties),
+        'totalDepartments',  (SELECT COUNT(*) FROM departments),
+        'totalPrograms',     (SELECT COUNT(*) FROM programs),
+        'totalCourses',      (SELECT COUNT(*) FROM courses),
+        'activeStudents',    (SELECT COUNT(*) FROM students WHERE status = 'Active'),
+        'activeFaculty',     (SELECT COUNT(*) FROM faculties WHERE "isActive" = true),
+        'activeSemesters',   (SELECT COUNT(*) FROM semesters WHERE "isCurrent" = true),
+        'totalEnrollments',  (SELECT COUNT(*) FROM enrollments),
+        'totalExams',        (SELECT COUNT(*) FROM exams)
+    ) INTO result;
+    RETURN result;
 END;
 $$ LANGUAGE plpgsql;
 ```
 
-#### Procedure 3: Referential Integrity Check Before Delete
+**Called from backend dashboard controller:**
+```javascript
+const [statsResult] = await sequelize.query('SELECT get_admin_dashboard_stats() as stats');
+const overview = statsResult[0].stats;
+```
+
+#### `get_department_statistics()` → TABLE
+**Purpose:** Returns department-wise counts for students, faculty, programs, and courses.
+
 ```sql
--- Used before deleting departments, courses, students, etc.
-CREATE OR REPLACE FUNCTION check_department_dependencies(p_dept_id INTEGER)
-RETURNS TABLE(programs_count BIGINT, faculty_count BIGINT, student_count BIGINT) AS $$
+CREATE OR REPLACE FUNCTION get_department_statistics()
+RETURNS TABLE(
+    department_id INTEGER,
+    department_name VARCHAR,
+    department_code VARCHAR,
+    student_count BIGINT,
+    faculty_count BIGINT,
+    program_count BIGINT,
+    course_count BIGINT
+) AS $$
 BEGIN
     RETURN QUERY
-    SELECT 
-        (SELECT COUNT(*) FROM programs WHERE "departmentId" = p_dept_id),
-        (SELECT COUNT(*) FROM faculties WHERE "departmentId" = p_dept_id),
-        (SELECT COUNT(*) FROM students WHERE "departmentId" = p_dept_id);
+    SELECT d.id,
+           d.name::VARCHAR, d.code::VARCHAR,
+           (SELECT COUNT(*) FROM students s WHERE s."departmentId" = d.id),
+           (SELECT COUNT(*) FROM faculties f WHERE f."departmentId" = d.id),
+           (SELECT COUNT(*) FROM programs p WHERE p."departmentId" = d.id),
+           (SELECT COUNT(*) FROM courses c WHERE c."departmentId" = d.id)
+    FROM departments d WHERE d."isActive" = true
+    ORDER BY d.name;
 END;
 $$ LANGUAGE plpgsql;
 ```
+
+#### `get_student_academic_summary(p_student_id INTEGER)` → JSON
+**Purpose:** Returns a complete academic profile for a student — CGPA, attendance, marks average, and credit counts.
+
+```sql
+CREATE OR REPLACE FUNCTION get_student_academic_summary(p_student_id INTEGER)
+RETURNS JSON AS $$
+DECLARE result JSON;
+BEGIN
+    SELECT json_build_object(
+        'studentId',          s.id,
+        'name',               s.name,
+        'cgpa',               s.cgpa,
+        'totalCreditsEarned', s."totalCreditsEarned",
+        'totalCoursesEnrolled', (SELECT COUNT(*) FROM enrollments e WHERE e."studentId" = p_student_id),
+        'completedCourses',   (SELECT COUNT(*) FROM enrollments e WHERE e."studentId" = p_student_id AND e.status = 'Completed'),
+        'averageAttendance',  (SELECT COALESCE(ROUND(AVG(e."attendancePercentage"), 2), 0)
+                               FROM enrollments e WHERE e."studentId" = p_student_id AND e.status = 'Enrolled'),
+        'averageMarks',       (SELECT COALESCE(ROUND(AVG(m.percentage), 2), 0)
+                               FROM marks m WHERE m."studentId" = p_student_id)
+    ) INTO result
+    FROM students s WHERE s.id = p_student_id;
+    RETURN result;
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### `calculate_student_cgpa(p_student_id INTEGER)` → NUMERIC
+**Purpose:** Computes CGPA using weighted average of grade points across all completed courses.
+
+```sql
+CREATE OR REPLACE FUNCTION calculate_student_cgpa(p_student_id INTEGER)
+RETURNS NUMERIC AS $$
+DECLARE
+    v_total_credits NUMERIC := 0;
+    v_weighted_points NUMERIC := 0;
+    rec RECORD;
+BEGIN
+    FOR rec IN
+        SELECT e."gradePoints", c.credits
+        FROM enrollments e
+        JOIN courses c ON c.id = e."courseId"
+        WHERE e."studentId" = p_student_id
+          AND e.status = 'Completed'
+          AND e."gradePoints" IS NOT NULL
+    LOOP
+        v_weighted_points := v_weighted_points + (rec."gradePoints" * rec.credits);
+        v_total_credits := v_total_credits + rec.credits;
+    END LOOP;
+
+    IF v_total_credits = 0 THEN RETURN 0; END IF;
+    RETURN ROUND(v_weighted_points / v_total_credits, 2);
+END;
+$$ LANGUAGE plpgsql;
+```
+
+---
+
+### 8.7 Stored Procedures
+
+#### Procedure 1: `enroll_student` — Enroll with full validation
+**Purpose:** Validates student status, course availability, capacity, and duplicate enrollment before inserting.
+
+```sql
+CREATE OR REPLACE PROCEDURE enroll_student(
+    p_student_id INTEGER,
+    p_course_id INTEGER,
+    p_semester_id INTEGER,
+    OUT p_enrollment_id INTEGER,
+    OUT p_message TEXT
+)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_existing INTEGER;
+    v_student_status VARCHAR;
+    v_course_active BOOLEAN;
+    v_max_capacity INTEGER;
+    v_current_count INTEGER;
+BEGIN
+    SELECT status INTO v_student_status FROM students WHERE id = p_student_id;
+    IF v_student_status IS NULL THEN
+        p_message := 'Student not found'; p_enrollment_id := NULL; RETURN;
+    END IF;
+    IF v_student_status <> 'Active' THEN
+        p_message := 'Student is not active'; p_enrollment_id := NULL; RETURN;
+    END IF;
+
+    SELECT "isActive", "maxCapacity" INTO v_course_active, v_max_capacity
+    FROM courses WHERE id = p_course_id;
+    IF NOT v_course_active THEN
+        p_message := 'Course is not active'; p_enrollment_id := NULL; RETURN;
+    END IF;
+
+    SELECT id INTO v_existing FROM enrollments
+    WHERE "studentId" = p_student_id AND "courseId" = p_course_id AND "semesterId" = p_semester_id;
+    IF v_existing IS NOT NULL THEN
+        p_message := 'Student is already enrolled'; p_enrollment_id := v_existing; RETURN;
+    END IF;
+
+    SELECT COUNT(*) INTO v_current_count FROM enrollments
+    WHERE "courseId" = p_course_id AND status = 'Enrolled';
+    IF v_current_count >= v_max_capacity THEN
+        p_message := 'Course has reached maximum capacity'; p_enrollment_id := NULL; RETURN;
+    END IF;
+
+    INSERT INTO enrollments ("studentId", "courseId", "semesterId", "enrollmentDate", status, "createdAt", "updatedAt")
+    VALUES (p_student_id, p_course_id, p_semester_id, CURRENT_DATE, 'Enrolled', NOW(), NOW())
+    RETURNING id INTO p_enrollment_id;
+    p_message := 'Student enrolled successfully';
+END;
+$$;
+```
+
+#### Procedure 2: `update_enrollment_grade` — Set grade with auto grade-point calculation
+```sql
+CREATE OR REPLACE PROCEDURE update_enrollment_grade(
+    p_enrollment_id INTEGER,
+    p_grade VARCHAR,
+    OUT p_message TEXT
+)
+LANGUAGE plpgsql AS $$
+DECLARE v_grade_points NUMERIC;
+BEGIN
+    v_grade_points := calculate_grade_points(p_grade);
+    UPDATE enrollments
+    SET grade = p_grade, "gradePoints" = v_grade_points,
+        status = CASE WHEN p_grade IN ('F', 'I', 'W') THEN status ELSE 'Completed' END,
+        "updatedAt" = NOW()
+    WHERE id = p_enrollment_id;
+    IF NOT FOUND THEN
+        p_message := 'Enrollment not found';
+    ELSE
+        p_message := 'Grade updated. Grade: ' || p_grade || ', Points: ' || v_grade_points;
+    END IF;
+END;
+$$;
+```
+
+#### Procedure 3: `mark_bulk_attendance` — Bulk attendance entry
+**Purpose:** Processes a JSON array of `{ studentId, status }` records and upserts attendance for a given course, date, and session.
+
+```sql
+CREATE OR REPLACE PROCEDURE mark_bulk_attendance(
+    p_course_id INTEGER,
+    p_date DATE,
+    p_session VARCHAR,
+    p_marked_by INTEGER,
+    p_records JSONB,
+    OUT p_successful INTEGER,
+    OUT p_updated INTEGER,
+    OUT p_failed INTEGER
+)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_record JSONB;
+    v_student_id INTEGER;
+    v_status VARCHAR;
+    v_existing_id INTEGER;
+BEGIN
+    p_successful := 0; p_updated := 0; p_failed := 0;
+    FOR v_record IN SELECT * FROM jsonb_array_elements(p_records) LOOP
+        BEGIN
+            v_student_id := (v_record->>'studentId')::INTEGER;
+            v_status := v_record->>'status';
+            SELECT id INTO v_existing_id FROM attendances
+            WHERE "studentId" = v_student_id AND "courseId" = p_course_id
+              AND date = p_date AND session = p_session;
+            IF v_existing_id IS NOT NULL THEN
+                UPDATE attendances
+                SET status = v_status, "markedBy" = p_marked_by, "updatedAt" = NOW()
+                WHERE id = v_existing_id;
+                p_updated := p_updated + 1;
+            ELSE
+                INSERT INTO attendances ("studentId", "courseId", date, session, status, "markedBy", "createdAt", "updatedAt")
+                VALUES (v_student_id, p_course_id, p_date, p_session, v_status, p_marked_by, NOW(), NOW());
+                p_successful := p_successful + 1;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            p_failed := p_failed + 1;
+        END;
+    END LOOP;
+END;
+$$;
+```
+
+#### Procedure 4: `enter_bulk_marks` — Bulk mark entry
+**Purpose:** Processes a JSON array of `{ studentId, marksObtained }` records and upserts marks for a given exam.
+
+```sql
+CREATE OR REPLACE PROCEDURE enter_bulk_marks(
+    p_exam_id INTEGER,
+    p_course_id INTEGER,
+    p_entered_by INTEGER,
+    p_marks JSONB,
+    OUT p_successful INTEGER,
+    OUT p_updated INTEGER,
+    OUT p_failed INTEGER
+)
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_record JSONB;
+    v_student_id INTEGER;
+    v_marks_obtained NUMERIC;
+    v_existing_id INTEGER;
+    v_max_marks NUMERIC;
+BEGIN
+    p_successful := 0; p_updated := 0; p_failed := 0;
+    SELECT "maxMarks" INTO v_max_marks FROM exams WHERE id = p_exam_id;
+    FOR v_record IN SELECT * FROM jsonb_array_elements(p_marks) LOOP
+        BEGIN
+            v_student_id := (v_record->>'studentId')::INTEGER;
+            v_marks_obtained := (v_record->>'marksObtained')::NUMERIC;
+            SELECT id INTO v_existing_id FROM marks
+            WHERE "studentId" = v_student_id AND "examId" = p_exam_id;
+            IF v_existing_id IS NOT NULL THEN
+                UPDATE marks
+                SET "marksObtained" = v_marks_obtained, "enteredBy" = p_entered_by, "updatedAt" = NOW()
+                WHERE id = v_existing_id;
+                p_updated := p_updated + 1;
+            ELSE
+                INSERT INTO marks ("studentId", "courseId", "examId", "marksObtained", "maxMarks", "enteredBy", "isPublished", "createdAt", "updatedAt")
+                VALUES (v_student_id, p_course_id, p_exam_id, v_marks_obtained, v_max_marks, p_entered_by, false, NOW(), NOW());
+                p_successful := p_successful + 1;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            p_failed := p_failed + 1;
+        END;
+    END LOOP;
+END;
+$$;
+```
+
+---
+
+### 8.8 Summary of All Database Objects
+
+| Type | Name | Table | Purpose |
+|---|---|---|---|
+| **TRIGGER** | `trg_marks_auto_calculate` | marks | Auto-fills percentage, grade, isPassed |
+| **TRIGGER** | `trg_mark_value_validation` | marks | Validates marks ≤ exam max marks |
+| **TRIGGER** | `trg_enrollment_count_update` | enrollments | Keeps course currentEnrollment in sync |
+| **TRIGGER** | `trg_enrollment_capacity_check` | enrollments | Blocks over-enrollment |
+| **TRIGGER** | `trg_enrollment_cgpa_update` | enrollments | Recalculates student CGPA on grade change |
+| **TRIGGER** | `trg_attendance_update_enrollment` | attendances | Updates attendance % on enrollment record |
+| **TRIGGER** | `trg_semester_date_validation` | semesters | Validates end date > start date |
+| **TRIGGER** | `trg_single_current_semester` | semesters | Ensures only one current semester |
+| **TRIGGER** | `trg_exam_marks_validation` | exams | passingMarks ≤ maxMarks |
+| **TRIGGER** | `trg_*_updated_at` (×12) | all tables | Auto-sets updatedAt timestamp |
+| **FUNCTION** | `calculate_grade` | — | Letter grade from percentage |
+| **FUNCTION** | `calculate_grade_points` | — | Grade points from letter grade |
+| **FUNCTION** | `calculate_attendance_percentage` | — | Attendance % for student+course |
+| **FUNCTION** | `calculate_student_cgpa` | — | CGPA from completed enrollments |
+| **FUNCTION** | `get_admin_dashboard_stats` | — | All dashboard counts as JSON |
+| **FUNCTION** | `get_department_statistics` | — | Dept-wise stats table |
+| **FUNCTION** | `get_student_academic_summary` | — | Full student academic profile |
+| **FUNCTION** | `get_faculty_course_summary` | — | Faculty course stats table |
+| **FUNCTION** | `update_updated_at_column` | — | Utility for updatedAt triggers |
+| **FUNCTION** | `generate_academic_code` | — | Formatted code generator |
+| **PROCEDURE** | `enroll_student` | — | Validated enrollment with capacity check |
+| **PROCEDURE** | `update_enrollment_grade` | — | Grade update with auto grade-point calc |
+| **PROCEDURE** | `mark_bulk_attendance` | — | Bulk attendance upsert from JSON |
+| **PROCEDURE** | `enter_bulk_marks` | — | Bulk marks upsert from JSON |
 
 ---
 
@@ -1405,11 +1903,13 @@ Every table has `id SERIAL PRIMARY KEY` — auto-incrementing integer.
 | **Tables** | 12 fully normalized relations |
 | **Relationships** | 23 foreign keys, 13 unique constraints |
 | **Normalization** | 3NF with controlled denormalization for performance |
-| **Triggers/Hooks** | 5 hooks (password hashing, grade calculation, date validation, mark validation, ID injection) |
-| **Stored Procedures** | 3 equivalent functions (attendance calc, grade points, dependency check) |
+| **DB Functions** | 15 PostgreSQL functions (grade calc, CGPA, attendance %, dashboard stats, etc.) |
+| **DB Triggers** | 21 triggers across all tables (auto-calculation, validation, sync, timestamps) |
+| **Stored Procedures** | 4 procedures (enroll_student, update_enrollment_grade, mark_bulk_attendance, enter_bulk_marks) |
 | **Indexes** | 5 custom + all PK/UNIQUE auto-created indexes |
+| **Migration** | `backend/migrations/supabase_functions_triggers.sql` — run via `npm run migrate` |
 | **Seed Data** | 1000+ records across all tables |
-| **Query Types** | SELECT with JOINs (up to 4 tables), GROUP BY, COUNT, ILIKE search, UPSERT, bulk UPDATE |
+| **Query Types** | SELECT with JOINs (up to 4 tables), GROUP BY, COUNT, ILIKE search, UPSERT, bulk UPDATE, DB function calls |
 
 ### Key Design Decisions
 
@@ -1421,9 +1921,11 @@ Every table has `id SERIAL PRIMARY KEY` — auto-incrementing integer.
 
 4. **Composite Unique Constraints:** Used on junction/transaction tables (enrollments, attendances, marks) to prevent duplicate entries.
 
-5. **Sequelize Hooks as Triggers:** Business logic (password hashing, grade computation) is implemented as ORM hooks that execute before/after database operations — functionally equivalent to SQL triggers.
+5. **Native PostgreSQL Triggers & Functions:** Business logic (grade computation, attendance sync, CGPA recalculation, enrollment capacity checks) is implemented directly as PostgreSQL database functions and triggers in Supabase. These are visible in **Supabase Dashboard → Database → Functions** and **Database → Triggers**. Sequelize hooks serve as an application-layer fallback only.
 
-6. **Connection Pooling:** PostgreSQL connection pool configured with max 10 connections, 30s acquire timeout, 10s idle timeout — handles concurrent requests efficiently.
+6. **Stored Procedures for Complex Operations:** Bulk operations (bulk attendance, bulk marks, enrollment with validation) are encapsulated as PostgreSQL stored procedures, ensuring data consistency within a single database transaction.
+
+7. **Connection Pooling:** PostgreSQL connection pool configured with max 10 connections, 30s acquire timeout, 10s idle timeout — handles concurrent requests efficiently.
 
 ---
 
