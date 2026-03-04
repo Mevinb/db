@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "seed": "node seeds/seedData.js",
     "migrate": "node migrations/runMigration.js",
+    "fix-schema": "node migrations/fixSchema.js",
     "setup": "node seeds/seedData.js && node migrations/runMigration.js"
   },
   "keywords": [
